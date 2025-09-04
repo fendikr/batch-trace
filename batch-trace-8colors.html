@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Batch Image → SVG (8 Colors, Detail + Remove White)</title>
+<style>
+  :root{--bg:#0f172a;--panel:#111827;--muted:#94a3b8;--text:#e5e7eb;--brand:#22d3ee}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Roboto,Arial}
+  header{padding:24px 16px;border-bottom:1px solid #1f2937}
+  h1{margin:0;font-size:20px}
+  main{max-width:1100px;margin:0 auto;padding:16px}
+  .bar{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .card{background:var(--panel);border:1px solid #1f2937;border-radius:12px;padding:14px}
+  .controls{display:grid;grid-template-columns:repeat(5,minmax(160px,1fr));gap:12px}
+  .control label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .control input[type="number"], .control input[type="range"], .control select{
+    width:100%;padding:8px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:var(--text)
+  }
+  .drop{padding:24px;border:2px dashed #334155;border-radius:12px;text-align:center;color:#cbd5e1}
+  .drop.drag{border-color:var(--brand);background:#062a30}
+  .btn{background:#1f2937;color:#e5e7eb;border:1px solid #334155;padding:10px 14px;border-radius:10px;cursor:pointer}
+  .btn.primary{background:linear-gradient(135deg,#22d3ee,#38bdf8);border:none;color:#0b1220;font-weight:700}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-top:14px}
+  .item{background:#0b1220;border:1px solid #1f2937;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .thumb{display:grid;place-items:center;background:#0a0f1a;aspect-ratio:4/3;overflow:hidden}
+  .thumb img{max-width:100%;max-height:100%}
+  .meta{padding:10px;border-top:1px solid #1f2937;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap}
+  .small{font-size:12px;color:#94a3b8}
+  progress{width:220px;height:10px;border-radius:999px;overflow:hidden;appearance:none}
+  progress::-webkit-progress-bar{background:#0b1220}
+  progress::-webkit-progress-value{background:linear-gradient(90deg,#22d3ee,#38bdf8)}
+  footer{opacity:.7;text-align:center;margin:18px 0;color:#9ca3af}
+  .pill{font-size:12px;padding:4px 8px;border-radius:999px;background:#0b1220;border:1px solid #1f2937;color:#93c5fd}
+  .check{display:flex;align-items:center;gap:8px;margin-top:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Batch Image → SVG (8 Colors, Detail Tinggi)</h1>
+  <div class="small">Client-side only · SVG mengikuti ukuran gambar · opsi hilangkan background putih</div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="controls">
+      <div class="control">
+        <label>Jumlah Warna (2–32) — default 8</label>
+        <input id="colors" type="number" min="2" max="32" value="8">
+      </div>
+      <div class="control" style="grid-column:span 2">
+        <label>Detail (lebih kiri = lebih halus & detail)</label>
+        <input id="detail" type="range" min="0" max="100" value="20">
+        <div class="small">Mengatur ltres/qtres/pathomit</div>
+      </div>
+      <div class="control">
+        <label>Pathomit (buang jalur sangat kecil)</label>
+        <select id="pathomit">
+          <option value="auto" selected>Auto by Detail</option>
+          <option value="0">0 px</option>
+          <option value="1">1 px</option>
+          <option value="2">2 px</option>
+          <option value="4">4 px</option>
+          <option value="8">8 px</option>
+        </select>
+      </div>
+      <div class="control">
+        <label>Output</label>
+        <div class="pill">SVG size = original</div>
+        <div class="check">
+          <input id="rmwhite" type="checkbox" checked>
+          <label for="rmwhite" class="small">Remove white background</label>
+        </div>
+      </div>
+    </div>
+
+    <div id="drop" class="drop" style="margin-top:12px">
+      <p><b>Tarik & letakkan</b> JPG/PNG di sini atau <label for="file" class="btn">Pilih File</label></p>
+      <input id="file" type="file" multiple accept="image/*" style="display:none" />
+      <div class="small">Diproses lokal di browser Anda.</div>
+    </div>
+
+    <div class="bar" style="margin-top:16px">
+      <button id="convert" class="btn primary" disabled>Convert to SVG</button>
+      <button id="downloadAll" class="btn" disabled>Download All (ZIP)</button>
+      <div style="display:flex;align-items:center;gap:10px">
+        <progress id="prog" value="0" max="100"></progress>
+        <span id="status" class="small">Menunggu file…</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="results" class="grid"></div>
+
+  <footer>Powered by <code>ImageTracer.js</code>. Tidak ada upload ke server.</footer>
+</main>
+
+<script src="https://unpkg.com/imagetracerjs@1.2.6/imagetracer_v1.2.6.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<script>
+(() => {
+  const fileInput = document.getElementById('file');
+  const drop = document.getElementById('drop');
+  const convertBtn = document.getElementById('convert');
+  const downloadAllBtn = document.getElementById('downloadAll');
+  const results = document.getElementById('results');
+  const prog = document.getElementById('prog');
+  const status = document.getElementById('status');
+  const colorsEl = document.getElementById('colors');
+  const detailEl = document.getElementById('detail');
+  const pathomitEl = document.getElementById('pathomit');
+  const rmwhiteEl = document.getElementById('rmwhite');
+
+  let files = [];
+  let svgs = []; // {name, svg}
+
+  // DnD
+  ['dragenter','dragover'].forEach(evt =>
+    drop.addEventListener(evt, e => { e.preventDefault(); drop.classList.add('drag'); })
+  );
+  ['dragleave','drop'].forEach(evt =>
+    drop.addEventListener(evt, e => { e.preventDefault(); drop.classList.remove('drag'); })
+  );
+  drop.addEventListener('drop', e => {
+    files = [...(e.dataTransfer.files || [])].filter(f => f.type.startsWith('image/'));
+    renderQueue();
+  });
+  fileInput.addEventListener('change', e => {
+    files = [...(e.target.files || [])].filter(f => f.type.startsWith('image/'));
+    renderQueue();
+  });
+
+  function renderQueue(){
+    results.innerHTML = '';
+    svgs = [];
+    if (!files.length){
+      convertBtn.disabled = true;
+      downloadAllBtn.disabled = true;
+      setStatus('Menunggu file…', 0);
+      return;
+    }
+    files.forEach(f => {
+      const item = document.createElement('div'); item.className = 'item';
+      const th = document.createElement('div'); th.className = 'thumb';
+      const img = document.createElement('img'); img.alt = f.name; th.appendChild(img);
+      const meta = document.createElement('div'); meta.className = 'meta';
+      meta.innerHTML = `<span class="small">${escapeHtml(f.name)}</span><span class="small" id="st-${hash(f.name)}">belum diproses</span>`;
+      item.appendChild(th); item.appendChild(meta); results.appendChild(item);
+      const reader = new FileReader();
+      reader.onload = () => { img.src = reader.result; };
+      reader.readAsDataURL(f);
+    });
+    convertBtn.disabled = false;
+    downloadAllBtn.disabled = true;
+    setStatus(`Siap memproses ${files.length} file.`, 0);
+  }
+
+  // Map slider "Detail" → opsi ImageTracer
+  function mapDetail(v){
+    const t = v/100;
+    const ltres = lerp(0.5, 3.0, t);  // kecil = detail
+    const qtres = lerp(0.5, 2.0, t);  // kecil = detail
+    let pathomitAuto = Math.round( lerp(0, 4, t) );
+    return { ltres, qtres, pathomitAuto };
+  }
+
+  function currentOptions(){
+    const colors = clamp(parseInt(colorsEl.value||'8',10), 2, 32);
+    const d = mapDetail(parseInt(detailEl.value,10));
+    let pathomitSel = pathomitEl.value;
+    const pathomit = pathomitSel === 'auto' ? d.pathomitAuto : parseFloat(pathomitSel);
+
+    return {
+      numberofcolors: colors,
+      ltres: d.ltres,
+      qtres: d.qtres,
+      pathomit: pathomit,
+      scale: 1,
+      viewbox: true,        // SVG mengikuti ukuran asli
+      roundcoords: 3,       // presisi koordinat
+      strokewidth: 0,
+      linefilter: false,
+      blurradius: 0,        // bisa diubah jika foto noisy
+      blurdelta: 20,
+      desc: true            // metadata path agar lebih konsisten
+    };
+  }
+
+  convertBtn.addEventListener('click', async () => {
+    if (!files.length) return;
+    convertBtn.disabled = true;
+    downloadAllBtn.disabled = true;
+    svgs = [];
+    setStatus('Memproses…', 0);
+
+    for (let i=0; i<files.length; i++){
+      const f = files[i];
+      const id = `st-${hash(f.name)}`;
+      setItemStatus(id, 'memuat…');
+
+      try{
+        const dataURL = await readAsDataURL(f);
+        const img = await loadImage(dataURL);
+
+        const opts = currentOptions();
+        const svgstr = await new Promise((resolve) => {
+          ImageTracer.imageToSVG(
+            img,
+            (svg) => resolve(fixSVG(svg, img.naturalWidth, img.naturalHeight, opts.roundcoords||2, rmwhiteEl.checked)),
+            opts
+          );
+        });
+
+        svgs.push({ name: replaceExt(f.name, '.svg'), svg: svgstr });
+        attachDownloadButtonFor(f.name, svgstr);
+        setItemStatus(id, 'selesai ✓');
+      } catch(err){
+        console.error(err);
+        setItemStatus(id, 'gagal ✗');
+      }
+      setStatus(`Diproses ${i+1}/${files.length}`, Math.round((i+1)/files.length*100));
+    }
+
+    downloadAllBtn.disabled = svgs.length === 0;
+    convertBtn.disabled = false;
+    setStatus(`Selesai: ${svgs.length}/${files.length} berhasil.`, 100);
+  });
+
+  downloadAllBtn.addEventListener('click', async () => {
+    if (!svgs.length) return;
+    const zip = new JSZip();
+    svgs.forEach(({name, svg}) => zip.file(name, svg));
+    const blob = await zip.generateAsync({type:'blob'});
+    saveAs(blob, `SVG_8colors_${Date.now()}.zip`);
+  });
+
+  // ===== Helpers =====
+  function fixSVG(svg, w, h, round=2, removeWhite=false){
+    // Pastikan ukuran mengikuti gambar
+    const rw = roundTo(w, round), rh = roundTo(h, round);
+    svg = svg.replace('<svg ', `<svg width="${rw}" height="${rh}" `);
+    if (!/viewBox=/.test(svg)) svg = svg.replace('<svg ', `<svg viewBox="0 0 ${rw} ${rh}" `);
+    // Opsional: hapus elemen berwarna putih agar background jadi transparan
+    if (removeWhite) svg = stripWhite(svg);
+    return svg;
+  }
+
+  // Hapus elemen SVG yang fill-nya putih (beberapa variasi umum)
+  function stripWhite(svg){
+    // 1) hapus path/rect/polygon dengan fill="#fff" / "#ffffff" / "rgb(255,255,255)" / "white"
+    const tags = ['path','rect','polygon','polyline','circle','ellipse'];
+    const patterns = [
+      /fill="#fff\b[^"]*"/gi,
+      /fill="#ffffff\b[^"]*"/gi,
+      /fill="white\b[^"]*"/gi,
+      /fill="rgb\(\s*255\s*,\s*255\s*,\s*255\s*\)"/gi
+    ];
+    // hapus elemen yang mengandung fill putih (cukup kasar tapi efektif untuk background)
+    tags.forEach(tag=>{
+      patterns.forEach(re=>{
+        // <tag ... fill="white" ... />
+        const reTag = new RegExp(`<${tag}[^>]*${re.source}[^>]*/>`, 'gi');
+        svg = svg.replace(reTag, '');
+        // <tag ... fill="white" ...>...</tag>
+        const reTag2 = new RegExp(`<${tag}[^>]*${re.source}[^>]*>[^<]*</${tag}>`, 'gi');
+        svg = svg.replace(reTag2, '');
+      });
+    });
+    // 2) dalam style="fill:#fff" atau style="fill:rgb(255,255,255)"
+    const stylePatterns = [
+      /style="[^"]*fill:\s*#fff[^";]*;?[^"]*"/gi,
+      /style="[^"]*fill:\s*#ffffff[^";]*;?[^"]*"/gi,
+      /style="[^"]*fill:\s*white[^";]*;?[^"]*"/gi,
+      /style="[^"]*fill:\s*rgb\(\s*255\s*,\s*255\s*,\s*255\s*\)[^";]*;?[^"]*"/gi
+    ];
+    tags.forEach(tag=>{
+      stylePatterns.forEach(re=>{
+        const reTag = new RegExp(`<${tag}[^>]*${re.source}[^>]*/>`, 'gi');
+        svg = svg.replace(reTag, '');
+        const reTag2 = new RegExp(`<${tag}[^>]*${re.source}[^>]*>[^<]*</${tag}>`, 'gi');
+        svg = svg.replace(reTag2, '');
+      });
+    });
+    // 3) kalau tersisa background rect ukuran penuh berwarna putih via css class, sulit dideteksi tanpa parser lengkap—diabaikan.
+    return svg;
+  }
+
+  function attachDownloadButtonFor(originalName, svgstr){
+    const id = hash(originalName);
+    const cards = [...document.querySelectorAll(`#st-${id}`)];
+    if (!cards.length) return;
+
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    btn.textContent = 'Download SVG';
+    btn.addEventListener('click', () => {
+      const blob = new Blob([svgstr], {type: 'image/svg+xml;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = replaceExt(originalName, '.svg');
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    const meta = cards[0].parentElement;
+    meta.appendChild(btn);
+  }
+
+  function setStatus(msg, pct){ status.textContent = msg; prog.value = pct||0; }
+  function setItemStatus(id, msg){ const el = document.getElementById(id); if (el) el.textContent = msg; }
+
+  function replaceExt(name, ext){ return name.replace(/\.[^/.]+$/, ext); }
+  function clamp(v, lo, hi){ return Math.min(Math.max(v, lo), hi); }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function roundTo(v, d){ const p = Math.pow(10, d); return Math.round(v*p)/p; }
+  function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function hash(s){ let h=0; for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i); h|=0;} return Math.abs(h); }
+  function readAsDataURL(file){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); }); }
+  function loadImage(src){ return new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+})();
+</script>
+</body>
+</html>
